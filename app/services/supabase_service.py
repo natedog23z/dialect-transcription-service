@@ -19,7 +19,7 @@ class SupabaseService:
             key: Supabase service key
         """
         self.client: Client = create_client(url, key)
-        self.storage_bucket = "audio-memos"
+        self.storage_bucket = "audio_memos"
         logger.info("Supabase service initialized")
     
     async def get_memo(self, memo_id: str) -> Dict[str, Any]:
@@ -86,14 +86,20 @@ class SupabaseService:
             Exception: If download fails
         """
         try:
-            # Extract the path from the URL
-            # Example URL format: https://project.supabase.co/storage/v1/object/public/audio-memos/user-id/timestamp.m4a
-            # We need the path: user-id/timestamp.m4a
-            path_parts = audio_url.split(f"{self.storage_bucket}/")
-            if len(path_parts) < 2:
-                raise Exception(f"Invalid audio URL format: {audio_url}")
-                
-            file_path = path_parts[1]
+            # Handle both formats:
+            # 1. Full path including bucket name: "audio_memos/filename.m4a"
+            # 2. Just the filename: "filename.m4a"
+            
+            if f"{self.storage_bucket}/" in audio_url:
+                # Extract the path from the URL that contains the bucket name
+                path_parts = audio_url.split(f"{self.storage_bucket}/")
+                if len(path_parts) < 2:
+                    raise Exception(f"Invalid audio URL format: {audio_url}")
+                file_path = path_parts[1]
+            else:
+                # If URL doesn't contain the bucket name, use it directly as the file path
+                file_path = audio_url
+                logger.info(f"Using filename directly as path: {file_path}")
             
             # Ensure temp directory exists
             os.makedirs(temp_dir, exist_ok=True)
