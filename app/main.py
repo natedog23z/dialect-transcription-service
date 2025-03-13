@@ -1,6 +1,7 @@
 import os
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from typing import Optional, Literal
 from dotenv import load_dotenv
 from loguru import logger
 
@@ -20,8 +21,10 @@ app = FastAPI(
 
 # Initialize services
 supabase_service = SupabaseService(
-    url=settings.SUPABASE_URL,
-    key=settings.SUPABASE_SERVICE_KEY
+    url_prod=settings.SUPABASE_URL_PROD,
+    key_prod=settings.SUPABASE_SERVICE_KEY_PROD,
+    url_local=settings.SUPABASE_URL_LOCAL,
+    key_local=settings.SUPABASE_SERVICE_KEY_LOCAL
 )
 
 transcription_service = TranscriptionService(
@@ -39,17 +42,25 @@ logger.add(
 # Request and response models
 class TranscriptionRequest(BaseModel):
     memoId: str
+    environment: Optional[Literal["production", "local"]] = "production"
 
 class TranscriptionResponse(BaseModel):
     success: bool
     memoId: str
     transcript: str = None
+    environment: str = None
 
 class ErrorResponse(BaseModel):
     success: bool
     memoId: str
     error: str
     message: str
+    environment: str = None
+
+class HealthCheckResponse(BaseModel):
+    service: str
+    supabase: dict
+    openai: str
 
 @app.get("/")
 async def root():
@@ -69,20 +80,22 @@ async def transcribe_audio(request: TranscriptionRequest):
     5. Update memo with transcription and status 'completed'
     """
     try:
-        logger.info(f"Received transcription request for memo ID: {request.memoId}")
+        env = request.environment or "production"
+        logger.info(f"Received transcription request for memo ID: {request.memoId} (Environment: {env})")
         
         # Step 1: Retrieve memo information
-        memo = await supabase_service.get_memo(request.memoId)
-        logger.info(f"Retrieved memo: {memo['id']}, status: {memo['status']}")
+        memo = await supabase_service.get_memo(request.memoId, env)
+        logger.info(f"Retrieved memo: {memo['id']}, status: {memo['status']} from {env} environment")
         
         # Step 2: Update memo status to 'transcribing'
-        await supabase_service.update_memo_status(request.memoId, "transcribing")
+        await supabase_service.update_memo_status(request.memoId, "transcribing", environment=env)
         
         try:
             # Step 3: Download audio file
             audio_file_path = await supabase_service.download_audio(
                 memo['audio_url'], 
-                settings.TEMP_DIR
+                settings.TEMP_DIR,
+                environment=env
             )
             
             # Step 4: Transcribe audio
@@ -92,32 +105,35 @@ async def transcribe_audio(request: TranscriptionRequest):
             await supabase_service.update_memo_status(
                 request.memoId, 
                 "completed",
-                transcript
+                transcript,
+                environment=env
             )
             
-            logger.info(f"Successfully transcribed memo {request.memoId}")
+            logger.info(f"Successfully transcribed memo {request.memoId} in {env} environment")
             
             return {
                 "success": True,
                 "memoId": request.memoId,
-                "transcript": transcript
+                "transcript": transcript,
+                "environment": env
             }
             
         except Exception as e:
             # If there's an error during processing, update the memo status
             error_type = type(e).__name__
-            await supabase_service.update_memo_status(request.memoId, "error")
+            await supabase_service.update_memo_status(request.memoId, "error", environment=env)
             raise Exception(f"{error_type}: {str(e)}")
             
     except Exception as e:
-        logger.error(f"Error transcribing memo {request.memoId}: {str(e)}")
+        logger.error(f"Error transcribing memo {request.memoId} in {request.environment} environment: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail={
                 "success": False,
                 "memoId": request.memoId,
                 "error": "processing_error",
-                "message": str(e)
+                "message": str(e),
+                "environment": request.environment
             }
         )
 
@@ -127,21 +143,23 @@ async def retry_transcription(request: TranscriptionRequest):
     Retry transcription for a memo that previously failed.
     """
     try:
-        logger.info(f"Received retry request for memo ID: {request.memoId}")
+        env = request.environment or "production"
+        logger.info(f"Received retry request for memo ID: {request.memoId} (Environment: {env})")
         
         # Get memo information
-        memo = await supabase_service.get_memo(request.memoId)
+        memo = await supabase_service.get_memo(request.memoId, env)
         
         # Verify memo is in error state
         if memo['status'] != "error":
-            logger.warning(f"Cannot retry memo {request.memoId} with status {memo['status']}")
+            logger.warning(f"Cannot retry memo {request.memoId} with status {memo['status']} in {env} environment")
             raise HTTPException(
                 status_code=400,
                 detail={
                     "success": False,
                     "memoId": request.memoId,
                     "error": "invalid_retry",
-                    "message": f"Cannot retry a memo with status '{memo['status']}'. Only memos with 'error' status can be retried."
+                    "message": f"Cannot retry a memo with status '{memo['status']}'. Only memos with 'error' status can be retried.",
+                    "environment": env
                 }
             )
         
@@ -152,36 +170,40 @@ async def retry_transcription(request: TranscriptionRequest):
         # Re-raise HTTP exceptions as-is
         raise
     except Exception as e:
-        logger.error(f"Error retrying transcription for memo {request.memoId}: {str(e)}")
+        logger.error(f"Error retrying transcription for memo {request.memoId} in {request.environment} environment: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail={
                 "success": False,
                 "memoId": request.memoId,
                 "error": "retry_error",
-                "message": str(e)
+                "message": str(e),
+                "environment": request.environment
             }
         )
 
-@app.get("/health")
+@app.get("/health", response_model=HealthCheckResponse)
 async def health_check():
     """
     Health check endpoint for monitoring.
-    Checks connection to Supabase and OpenAI API.
+    Checks connection to Supabase (both environments) and OpenAI API.
     """
     health_status = {
         "service": "healthy",
-        "supabase": "unknown",
+        "supabase": {},
         "openai": "unknown"
     }
     
-    # Check Supabase connection
+    # Check all Supabase connections
     try:
-        supabase_healthy = await supabase_service.check_connection()
-        health_status["supabase"] = "healthy" if supabase_healthy else "unhealthy"
+        supabase_connections = await supabase_service.check_all_connections()
+        health_status["supabase"] = {
+            env: "healthy" if status else "unhealthy" 
+            for env, status in supabase_connections.items()
+        }
     except Exception as e:
         logger.error(f"Supabase health check error: {str(e)}")
-        health_status["supabase"] = "unhealthy"
+        health_status["supabase"] = {"error": str(e)}
     
     # Check OpenAI connection
     try:

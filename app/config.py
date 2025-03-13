@@ -9,9 +9,13 @@ class Settings(BaseSettings):
     """
     Application settings loaded from environment variables.
     """
-    # Supabase Configuration
-    SUPABASE_URL: str = os.getenv("SUPABASE_URL")
-    SUPABASE_SERVICE_KEY: str = os.getenv("SUPABASE_SERVICE_KEY")
+    # Supabase Configuration - Production
+    SUPABASE_URL_PROD: str = os.getenv("SUPABASE_URL_PROD", os.getenv("SUPABASE_URL", ""))
+    SUPABASE_SERVICE_KEY_PROD: str = os.getenv("SUPABASE_SERVICE_KEY_PROD", os.getenv("SUPABASE_SERVICE_KEY", ""))
+    
+    # Supabase Configuration - Local
+    SUPABASE_URL_LOCAL: str = os.getenv("SUPABASE_URL_LOCAL", "")
+    SUPABASE_SERVICE_KEY_LOCAL: str = os.getenv("SUPABASE_SERVICE_KEY_LOCAL", "")
     
     # OpenAI Configuration
     WHISPER_API_KEY: str = os.getenv("WHISPER_API_KEY")

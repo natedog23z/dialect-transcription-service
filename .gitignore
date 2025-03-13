@@ -1,5 +1,11 @@
 # Environment variables
 .env
+.env.backup
+.env~
+.env.bak
+.env.local
+.env.development
+.env.production
 
 # Python cache files
 __pycache__/
