@@ -1,6 +1,6 @@
 import os
 import tempfile
-from typing import Dict, Optional, Any, Literal
+from typing import Dict, Optional, Any, Literal, Tuple
 from supabase import create_client, Client
 from loguru import logger
 import httpx
@@ -10,27 +10,62 @@ class SupabaseService:
     Service for interacting with Supabase (database and storage).
     """
     
-    def __init__(self, url_prod: str, key_prod: str, url_local: str, key_local: str):
+    def __init__(self, 
+                url_prod: str, key_prod: str, branch_prod: str,
+                url_staging: str, key_staging: str, branch_staging: str,
+                url_local: str, key_local: str, branch_local: str):
         """
-        Initialize the Supabase clients for both production and local environments.
+        Initialize the Supabase clients for production, staging, and local environments.
         
         Args:
             url_prod: Production Supabase project URL
             key_prod: Production Supabase service key
+            branch_prod: Production Supabase branch name
+            url_staging: Staging Supabase project URL
+            key_staging: Staging Supabase service key
+            branch_staging: Staging Supabase branch name
             url_local: Local Supabase project URL
             key_local: Local Supabase service key
+            branch_local: Local Supabase branch name
         """
         self.clients = {}
+        self.branches = {}
         
         # Initialize production client if credentials are provided
         if url_prod and key_prod:
+            # Initialize without options first - we'll handle branch separately
             self.clients['production'] = create_client(url_prod, key_prod)
-            logger.info("Production Supabase client initialized")
+            
+            # Store branch name if provided
+            if branch_prod:
+                self.branches['production'] = branch_prod
+                logger.info(f"Production Supabase client initialized with branch: {branch_prod}")
+            else:
+                logger.info("Production Supabase client initialized with default branch")
+        
+        # Initialize staging client if credentials are provided
+        if url_staging and key_staging:
+            # Initialize without options first - we'll handle branch separately
+            self.clients['staging'] = create_client(url_staging, key_staging)
+            
+            # Store branch name if provided
+            if branch_staging:
+                self.branches['staging'] = branch_staging
+                logger.info(f"Staging Supabase client initialized with branch: {branch_staging}")
+            else:
+                logger.info("Staging Supabase client initialized with default branch")
         
         # Initialize local client if credentials are provided
         if url_local and key_local:
+            # Initialize without options first - we'll handle branch separately
             self.clients['local'] = create_client(url_local, key_local)
-            logger.info("Local Supabase client initialized")
+            
+            # Store branch name if provided
+            if branch_local:
+                self.branches['local'] = branch_local
+                logger.info(f"Local Supabase client initialized with branch: {branch_local}")
+            else:
+                logger.info("Local Supabase client initialized with default branch")
             
         # Get system environment variable, but don't use it directly
         # This will only be used when no environment is specified in requests
@@ -39,59 +74,63 @@ class SupabaseService:
         
         # Default client is based on system ENV if available, otherwise production
         self.default_environment = system_env if system_env in self.clients else 'production'
-        if self.default_environment not in self.clients and 'local' in self.clients:
-            self.default_environment = 'local'
-        
+        if self.default_environment not in self.clients:
+            available_envs = list(self.clients.keys())
+            if available_envs:
+                self.default_environment = available_envs[0]
+                logger.warning(f"Default environment {system_env} not found, using {self.default_environment} instead")
+                
         # Storage bucket name (same across environments)
         self.storage_bucket = "audio_memos"
         
         logger.info(f"Supabase service initialized with environments: {', '.join(self.clients.keys())}")
         logger.info(f"Default environment (used when no environment is specified): {self.default_environment}")
+        
+        # Log branch info
+        for env, branch in self.branches.items():
+            logger.info(f"Branch for {env} environment: {branch}")
     
-    def get_client(self, environment: Optional[str] = None) -> Client:
+    def get_client(self, environment: Optional[str] = None) -> Tuple[Client, Optional[str]]:
         """
-        Get the appropriate Supabase client based on the environment.
+        Get the appropriate Supabase client for the specified environment.
         
         Args:
-            environment: 'production' or 'local' (defaults to self.default_environment)
+            environment: Optional environment (production, staging, local)
             
         Returns:
-            Supabase Client instance
+            Tuple of (Supabase client, branch name)
             
         Raises:
-            Exception: If the requested environment client is not initialized
+            ValueError: If no client is available for the specified environment
         """
-        # If environment is explicitly provided, use it (priority over system ENV)
-        if environment:
-            # Log the explicitly requested environment
-            logger.debug(f"Environment explicitly requested in function call: {environment}")
-            
-            # Normalize environment value
-            env = environment.lower()
-            
-            # Validate environment
-            if env not in ['production', 'local']:
-                logger.warning(f"Invalid environment '{env}', falling back to {self.default_environment}")
-                env = self.default_environment
-            
-            # Get the client for the requested environment
-            if env in self.clients:
-                logger.info(f"Using {env} Supabase client (from explicit request parameter)")
-                return self.clients[env]
-            
-            # If requested environment is not available, warn and fall back to default
-            logger.warning(f"Requested environment '{env}' not initialized, falling back to {self.default_environment}")
-            
-        # Use default environment if no environment was explicitly provided or if requested env is not available
-        if self.default_environment in self.clients:
-            # If we're here because no environment was provided, log that we're using the default
-            if not environment:
-                logger.info(f"No environment specified, using default: {self.default_environment}")
-            return self.clients[self.default_environment]
+        # If environment is None or empty, use the default
+        env = environment if environment else self.default_environment
+        env = env.lower()  # Convert to lowercase for consistency
         
-        # If no clients are available, raise an exception
-        available_envs = list(self.clients.keys())
-        raise Exception(f"No Supabase client available for environment. Available environments: {available_envs}")
+        # Log which environment was requested vs which is being used
+        if environment and environment != env:
+            logger.info(f"Environment requested: {environment}, using normalized: {env}")
+        
+        # Check if we have a client for the requested environment
+        if env not in self.clients:
+            available_envs = list(self.clients.keys())
+            err_msg = f"No Supabase client available for environment: {env}. Available environments: {', '.join(available_envs)}"
+            logger.error(err_msg)
+            raise ValueError(err_msg)
+            
+        branch = self.branches.get(env)
+        logger.debug(f"Using Supabase client for environment: {env}, branch: {branch if branch else 'default'}")
+        
+        # For database operations, you can use the client with the specified schema
+        # Example usage: 
+        # from supabase.client import ClientOptions
+        # client, branch = self.get_client('staging')
+        # if branch:
+        #     result = client.table('table_name').schema(branch).select('*').execute()
+        # else:
+        #     result = client.table('table_name').select('*').execute()
+        
+        return self.clients[env], branch
     
     async def get_memo(self, memo_id: str, environment: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -99,7 +138,7 @@ class SupabaseService:
         
         Args:
             memo_id: UUID of the memo to retrieve
-            environment: 'production' or 'local' (optional)
+            environment: 'production', 'staging', or 'local' (optional)
             
         Returns:
             Dict containing the memo data
@@ -109,13 +148,21 @@ class SupabaseService:
         """
         try:
             # Get environment-specific client
-            client = self.get_client(environment)
+            client, branch = self.get_client(environment)
             
             # More explicit logging about which environment is being used
             env_display = environment if environment else f"{self.default_environment} (default)"
-            logger.info(f"Retrieving memo {memo_id} from {env_display} environment")
+            branch_display = f", branch: {branch}" if branch else ""
+            logger.info(f"Retrieving memo {memo_id} from {env_display} environment{branch_display}")
             
-            response = client.table("memos").select("*").eq("id", memo_id).execute()
+            # Use the branch schema if specified
+            query = client.table("memos")
+            
+            # Apply branch schema if available
+            if branch:
+                query = query.schema(branch)
+                
+            response = query.select("*").eq("id", memo_id).execute()
             
             if not response.data or len(response.data) == 0:
                 raise Exception(f"Memo with ID {memo_id} not found")
@@ -123,7 +170,8 @@ class SupabaseService:
             return response.data[0]
         except Exception as e:
             env_display = environment if environment else f"{self.default_environment} (default)"
-            logger.error(f"Error retrieving memo {memo_id} from {env_display} environment: {str(e)}")
+            branch_display = f", branch: {branch}" if branch else ""
+            logger.error(f"Error retrieving memo {memo_id} from {env_display} environment{branch_display}: {str(e)}")
             raise
     
     async def update_memo_status(self, memo_id: str, status: str, transcript: Optional[str] = None, environment: Optional[str] = None) -> None:
@@ -134,30 +182,39 @@ class SupabaseService:
             memo_id: UUID of the memo to update
             status: New status ('transcribing', 'completed', 'error')
             transcript: Optional transcript text
-            environment: 'production' or 'local' (optional)
+            environment: 'production', 'staging', or 'local' (optional)
             
         Raises:
             Exception: If update fails
         """
         try:
             # Get environment-specific client
-            client = self.get_client(environment)
+            client, branch = self.get_client(environment)
             
             # More explicit logging about which environment is being used
             env_display = environment if environment else f"{self.default_environment} (default)"
-            logger.info(f"Updating memo {memo_id} status to {status} in {env_display} environment")
+            branch_display = f", branch: {branch}" if branch else ""
+            logger.info(f"Updating memo {memo_id} status to {status} in {env_display} environment{branch_display}")
             
             update_data = {"status": status}
             
             if transcript is not None:
                 update_data["transcript"] = transcript
+            
+            # Use the branch schema if specified
+            query = client.table("memos")
+            
+            # Apply branch schema if available
+            if branch:
+                query = query.schema(branch)
                 
-            client.table("memos").update(update_data).eq("id", memo_id).execute()
+            query.update(update_data).eq("id", memo_id).execute()
             
             logger.info(f"Successfully updated memo {memo_id} status to {status}")
         except Exception as e:
             env_display = environment if environment else f"{self.default_environment} (default)"
-            logger.error(f"Error updating memo {memo_id} in {env_display} environment: {str(e)}")
+            branch_display = f", branch: {branch}" if branch else ""
+            logger.error(f"Error updating memo {memo_id} in {env_display} environment{branch_display}: {str(e)}")
             raise
     
     async def download_audio(self, audio_url: str, temp_dir: str, environment: Optional[str] = None) -> str:
@@ -177,11 +234,12 @@ class SupabaseService:
         """
         try:
             # Get environment-specific client
-            client = self.get_client(environment)
+            client, branch = self.get_client(environment)
             
             # More explicit logging about which environment is being used
             env_display = environment if environment else f"{self.default_environment} (default)"
-            logger.info(f"Downloading audio from {env_display} environment: {audio_url}")
+            branch_display = f", branch: {branch}" if branch else ""
+            logger.info(f"Downloading audio from {env_display} environment{branch_display}: {audio_url}")
             
             # Handle both formats:
             # 1. Full path including bucket name: "audio_memos/filename.m4a"
@@ -216,7 +274,8 @@ class SupabaseService:
             return temp_file_path
         except Exception as e:
             env_display = environment if environment else f"{self.default_environment} (default)"
-            logger.error(f"Error downloading audio from {audio_url} in {env_display} environment: {str(e)}")
+            branch_display = f", branch: {branch}" if branch else ""
+            logger.error(f"Error downloading audio from {audio_url} in {env_display} environment{branch_display}: {str(e)}")
             raise
     
     async def check_connection(self, environment: Optional[str] = None) -> bool:
@@ -224,26 +283,36 @@ class SupabaseService:
         Check connection to Supabase.
         
         Args:
-            environment: 'production' or 'local' (optional)
+            environment: 'production', 'staging', or 'local' (optional)
             
         Returns:
             True if connection is successful, False otherwise
         """
         try:
             # Get environment-specific client
-            client = self.get_client(environment)
+            client, branch = self.get_client(environment)
             
             # More explicit logging about which environment is being used
             env_display = environment if environment else f"{self.default_environment} (default)"
-            logger.debug(f"Checking connection to {env_display} environment")
+            branch_display = f", branch: {branch}" if branch else ""
+            logger.debug(f"Checking connection to {env_display} environment{branch_display}")
             
+            # Use the branch schema if specified
+            query = client.table("memos")
+            
+            # Apply branch schema if available
+            if branch:
+                query = query.schema(branch)
+                
             # Simple query to check if we can connect
-            client.table("memos").select("id").limit(1).execute()
-            logger.info(f"Supabase connection check successful for {env_display} environment")
+            query.select("id").limit(1).execute()
+            
+            logger.info(f"Supabase connection check successful for {env_display} environment{branch_display}")
             return True
         except Exception as e:
             env_display = environment if environment else f"{self.default_environment} (default)"
-            logger.error(f"Supabase connection check failed for {env_display} environment: {str(e)}")
+            branch_display = f", branch: {branch}" if branch else ""
+            logger.error(f"Supabase connection check failed for {env_display} environment{branch_display}: {str(e)}")
             return False
             
     async def check_all_connections(self) -> Dict[str, bool]:

@@ -6,20 +6,50 @@ A Python FastAPI microservice for transcribing audio files for the Dialect Audio
 
 This microservice integrates with a Supabase backend to process audio files created by the Dialect Audio iOS app. It downloads audio files from Supabase Storage, transcribes them using OpenAI's Whisper API, and updates the database record with the transcription.
 
+## Multi-Environment Support
+
+The service supports a three-environment workflow for the Dialect Audio mobile app:
+
+1. 🟢 **Local Development**: Developers use feature branches with local Supabase. Does NOT connect to this FASTAPI service because database is local.
+2. 🟡 **Staging**: Integration testing with Supabase preview branches, connecting to this production FASTAPI service.
+3. 🔵 **Production**: Live app with production Supabase, connecting to this production FASTAPI service.
+
+The service accepts requests from both staging and production environments through environment-aware request handling.
+
+### Supabase Branch Support
+
+This service supports Supabase database branches for multi-environment development:
+
+- **Production**: Uses the main branch of the Supabase database
+- **Staging**: Uses a staging branch of the same Supabase project
+- **Local**: Uses a local Supabase instance (no branch needed)
+
+The branch information is automatically handled by the service based on the environment specified in the request.
+
 ## Features
 
 - FastAPI REST API endpoints for audio transcription
 - Integration with Supabase for database and storage access
+- Support for multiple Supabase environments (production and staging)
+- **Support for Supabase database branching**
 - Integration with OpenAI's Whisper API for audio transcription
 - Error handling and retry functionality
 - Health check endpoint for monitoring
 - Configurable via environment variables
+- CORS support for cross-origin requests
+
+## API Endpoints
+
+- `/health`: Health check endpoint returning service status
+- `/transcribe`: Accept audio file uploads for transcription
+- `/transcribe_url`: Accept audio URLs for transcription
+- `/retry-transcribe`: Retry failed transcriptions
 
 ## Requirements
 
 - Python 3.9+
 - OpenAI API key
-- Supabase project URL and service key
+- Supabase project URLs and service keys for staging and production environments
 
 ## Installation
 

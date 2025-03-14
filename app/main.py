@@ -1,7 +1,8 @@
 import os
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
-from typing import Optional, Literal
+from fastapi import FastAPI, HTTPException, UploadFile, File, Request, Header
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field, HttpUrl
+from typing import Optional, Literal, Dict, Union, List, Any
 from dotenv import load_dotenv
 from loguru import logger
 
@@ -19,12 +20,26 @@ app = FastAPI(
     version="0.1.0"
 )
 
+# Configure CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # Initialize services
 supabase_service = SupabaseService(
     url_prod=settings.SUPABASE_URL_PROD,
     key_prod=settings.SUPABASE_SERVICE_KEY_PROD,
+    branch_prod=settings.SUPABASE_BRANCH_PROD,
+    url_staging=settings.SUPABASE_URL_STAGING,
+    key_staging=settings.SUPABASE_SERVICE_KEY_STAGING,
+    branch_staging=settings.SUPABASE_BRANCH_STAGING,
     url_local=settings.SUPABASE_URL_LOCAL,
-    key_local=settings.SUPABASE_SERVICE_KEY_LOCAL
+    key_local=settings.SUPABASE_SERVICE_KEY_LOCAL,
+    branch_local=settings.SUPABASE_BRANCH_LOCAL
 )
 
 transcription_service = TranscriptionService(
@@ -42,7 +57,7 @@ logger.add(
 # Request and response models
 class TranscriptionRequest(BaseModel):
     memoId: str
-    environment: Optional[Literal["production", "local"]] = "production"
+    environment: Optional[Literal["production", "staging", "local"]] = "production"
 
 class TranscriptionResponse(BaseModel):
     success: bool
@@ -58,9 +73,8 @@ class ErrorResponse(BaseModel):
     environment: str = None
 
 class HealthCheckResponse(BaseModel):
+    status: str
     service: str
-    supabase: dict
-    openai: str
 
 @app.get("/")
 async def root():
@@ -198,35 +212,86 @@ async def retry_transcription(request: TranscriptionRequest):
             }
         )
 
+@app.post("/transcribe_url", response_model=TranscriptionResponse)
+async def transcribe_from_url(request: Dict[str, Any], x_environment: Optional[str] = Header(None, alias="X-Environment")):
+    """
+    Transcribe audio from a URL.
+    
+    Args:
+        request: JSON object containing memoId and audioUrl
+        x_environment: Environment header (production, staging, local)
+        
+    Returns:
+        Transcription response
+    """
+    try:
+        memo_id = request.get("memoId")
+        audio_url = request.get("audioUrl")
+        
+        # Use header environment if provided, otherwise use the one in the request body
+        environment = x_environment or request.get("environment", "production")
+        
+        if not memo_id:
+            raise HTTPException(status_code=400, detail="memoId is required")
+        if not audio_url:
+            raise HTTPException(status_code=400, detail="audioUrl is required")
+            
+        logger.info(f"Transcribing URL audio for memo {memo_id} in {environment} environment")
+        
+        # Download audio to a temp file
+        temp_file_path = await supabase_service.download_audio(
+            audio_url=audio_url, 
+            temp_dir=settings.TEMP_DIR,
+            environment=environment
+        )
+        
+        # Get the transcription
+        transcript = await transcription_service.transcribe_audio_file(temp_file_path)
+        
+        # Update the memo record with the transcript
+        await supabase_service.update_memo_status(
+            memo_id=memo_id,
+            status="completed",
+            transcript=transcript,
+            environment=environment
+        )
+        
+        # Delete the temp file
+        if os.path.exists(temp_file_path):
+            os.remove(temp_file_path)
+            
+        logger.info(f"Successfully transcribed URL audio for memo {memo_id} in {environment} environment")
+        
+        return {
+            "success": True,
+            "memoId": memo_id,
+            "transcript": transcript,
+            "environment": environment
+        }
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
+    except Exception as e:
+        logger.error(f"Error transcribing URL audio for memo {memo_id} in {environment} environment: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "success": False,
+                "memoId": memo_id,
+                "error": "transcription_url_error",
+                "message": str(e),
+                "environment": environment
+            }
+        )
+
 @app.get("/health", response_model=HealthCheckResponse)
 async def health_check():
     """
     Health check endpoint for monitoring.
-    Checks connection to Supabase (both environments) and OpenAI API.
+    Returns a simplified health status of the service.
     """
-    health_status = {
-        "service": "healthy",
-        "supabase": {},
-        "openai": "unknown"
-    }
-    
-    # Check all Supabase connections
-    try:
-        supabase_connections = await supabase_service.check_all_connections()
-        health_status["supabase"] = {
-            env: "healthy" if status else "unhealthy" 
-            for env, status in supabase_connections.items()
-        }
-    except Exception as e:
-        logger.error(f"Supabase health check error: {str(e)}")
-        health_status["supabase"] = {"error": str(e)}
-    
-    # Check OpenAI connection
-    try:
-        openai_healthy = await transcription_service.check_connection()
-        health_status["openai"] = "healthy" if openai_healthy else "unhealthy"
-    except Exception as e:
-        logger.error(f"OpenAI health check error: {str(e)}")
-        health_status["openai"] = "unhealthy"
-    
-    return health_status 
+    return {
+        "status": "healthy",
+        "service": "Dialect Transcription Service"
+    } 
