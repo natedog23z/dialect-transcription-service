@@ -32,14 +32,21 @@ class SupabaseService:
             self.clients['local'] = create_client(url_local, key_local)
             logger.info("Local Supabase client initialized")
             
-        # Default client is production if available
-        self.default_environment = 'production' if 'production' in self.clients else 'local'
+        # Get system environment variable, but don't use it directly
+        # This will only be used when no environment is specified in requests
+        system_env = os.getenv("ENV", "production").lower()
+        logger.info(f"System environment variable ENV is set to: {system_env}")
+        
+        # Default client is based on system ENV if available, otherwise production
+        self.default_environment = system_env if system_env in self.clients else 'production'
+        if self.default_environment not in self.clients and 'local' in self.clients:
+            self.default_environment = 'local'
         
         # Storage bucket name (same across environments)
         self.storage_bucket = "audio_memos"
         
         logger.info(f"Supabase service initialized with environments: {', '.join(self.clients.keys())}")
-        logger.info(f"Default environment: {self.default_environment}")
+        logger.info(f"Default environment (used when no environment is specified): {self.default_environment}")
     
     def get_client(self, environment: Optional[str] = None) -> Client:
         """
@@ -54,27 +61,37 @@ class SupabaseService:
         Raises:
             Exception: If the requested environment client is not initialized
         """
-        # Normalize environment value
-        env = environment or self.default_environment
-        env = env.lower()
-        
-        # Validate environment
-        if env not in ['production', 'local']:
-            logger.warning(f"Invalid environment '{env}', falling back to {self.default_environment}")
-            env = self.default_environment
-        
-        # Get the client for the requested environment
-        if env in self.clients:
-            logger.debug(f"Using {env} Supabase client")
-            return self.clients[env]
-        
-        # If requested environment is not available, try to use the default
+        # If environment is explicitly provided, use it (priority over system ENV)
+        if environment:
+            # Log the explicitly requested environment
+            logger.debug(f"Environment explicitly requested in function call: {environment}")
+            
+            # Normalize environment value
+            env = environment.lower()
+            
+            # Validate environment
+            if env not in ['production', 'local']:
+                logger.warning(f"Invalid environment '{env}', falling back to {self.default_environment}")
+                env = self.default_environment
+            
+            # Get the client for the requested environment
+            if env in self.clients:
+                logger.info(f"Using {env} Supabase client (from explicit request parameter)")
+                return self.clients[env]
+            
+            # If requested environment is not available, warn and fall back to default
+            logger.warning(f"Requested environment '{env}' not initialized, falling back to {self.default_environment}")
+            
+        # Use default environment if no environment was explicitly provided or if requested env is not available
         if self.default_environment in self.clients:
-            logger.warning(f"Environment '{env}' not initialized, falling back to {self.default_environment}")
+            # If we're here because no environment was provided, log that we're using the default
+            if not environment:
+                logger.info(f"No environment specified, using default: {self.default_environment}")
             return self.clients[self.default_environment]
         
         # If no clients are available, raise an exception
-        raise Exception(f"No Supabase client available for environment '{env}'")
+        available_envs = list(self.clients.keys())
+        raise Exception(f"No Supabase client available for environment. Available environments: {available_envs}")
     
     async def get_memo(self, memo_id: str, environment: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -91,8 +108,12 @@ class SupabaseService:
             Exception: If memo not found or other database error
         """
         try:
+            # Get environment-specific client
             client = self.get_client(environment)
-            logger.info(f"Retrieving memo {memo_id} from {environment or self.default_environment} environment")
+            
+            # More explicit logging about which environment is being used
+            env_display = environment if environment else f"{self.default_environment} (default)"
+            logger.info(f"Retrieving memo {memo_id} from {env_display} environment")
             
             response = client.table("memos").select("*").eq("id", memo_id).execute()
             
@@ -101,7 +122,8 @@ class SupabaseService:
                 
             return response.data[0]
         except Exception as e:
-            logger.error(f"Error retrieving memo {memo_id} from {environment or self.default_environment} environment: {str(e)}")
+            env_display = environment if environment else f"{self.default_environment} (default)"
+            logger.error(f"Error retrieving memo {memo_id} from {env_display} environment: {str(e)}")
             raise
     
     async def update_memo_status(self, memo_id: str, status: str, transcript: Optional[str] = None, environment: Optional[str] = None) -> None:
@@ -118,8 +140,12 @@ class SupabaseService:
             Exception: If update fails
         """
         try:
+            # Get environment-specific client
             client = self.get_client(environment)
-            logger.info(f"Updating memo {memo_id} status to {status} in {environment or self.default_environment} environment")
+            
+            # More explicit logging about which environment is being used
+            env_display = environment if environment else f"{self.default_environment} (default)"
+            logger.info(f"Updating memo {memo_id} status to {status} in {env_display} environment")
             
             update_data = {"status": status}
             
@@ -128,9 +154,10 @@ class SupabaseService:
                 
             client.table("memos").update(update_data).eq("id", memo_id).execute()
             
-            logger.info(f"Updated memo {memo_id} status to {status}")
+            logger.info(f"Successfully updated memo {memo_id} status to {status}")
         except Exception as e:
-            logger.error(f"Error updating memo {memo_id} in {environment or self.default_environment} environment: {str(e)}")
+            env_display = environment if environment else f"{self.default_environment} (default)"
+            logger.error(f"Error updating memo {memo_id} in {env_display} environment: {str(e)}")
             raise
     
     async def download_audio(self, audio_url: str, temp_dir: str, environment: Optional[str] = None) -> str:
@@ -149,8 +176,12 @@ class SupabaseService:
             Exception: If download fails
         """
         try:
+            # Get environment-specific client
             client = self.get_client(environment)
-            logger.info(f"Downloading audio from {environment or self.default_environment} environment: {audio_url}")
+            
+            # More explicit logging about which environment is being used
+            env_display = environment if environment else f"{self.default_environment} (default)"
+            logger.info(f"Downloading audio from {env_display} environment: {audio_url}")
             
             # Handle both formats:
             # 1. Full path including bucket name: "audio_memos/filename.m4a"
@@ -184,7 +215,8 @@ class SupabaseService:
             logger.info(f"Downloaded audio file to {temp_file_path}")
             return temp_file_path
         except Exception as e:
-            logger.error(f"Error downloading audio from {audio_url} in {environment or self.default_environment} environment: {str(e)}")
+            env_display = environment if environment else f"{self.default_environment} (default)"
+            logger.error(f"Error downloading audio from {audio_url} in {env_display} environment: {str(e)}")
             raise
     
     async def check_connection(self, environment: Optional[str] = None) -> bool:
@@ -198,13 +230,20 @@ class SupabaseService:
             True if connection is successful, False otherwise
         """
         try:
+            # Get environment-specific client
             client = self.get_client(environment)
+            
+            # More explicit logging about which environment is being used
+            env_display = environment if environment else f"{self.default_environment} (default)"
+            logger.debug(f"Checking connection to {env_display} environment")
+            
             # Simple query to check if we can connect
             client.table("memos").select("id").limit(1).execute()
-            logger.info(f"Supabase connection check successful for {environment or self.default_environment} environment")
+            logger.info(f"Supabase connection check successful for {env_display} environment")
             return True
         except Exception as e:
-            logger.error(f"Supabase connection check failed for {environment or self.default_environment} environment: {str(e)}")
+            env_display = environment if environment else f"{self.default_environment} (default)"
+            logger.error(f"Supabase connection check failed for {env_display} environment: {str(e)}")
             return False
             
     async def check_all_connections(self) -> Dict[str, bool]:

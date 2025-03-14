@@ -80,8 +80,16 @@ async def transcribe_audio(request: TranscriptionRequest):
     5. Update memo with transcription and status 'completed'
     """
     try:
-        env = request.environment or "production"
-        logger.info(f"Received transcription request for memo ID: {request.memoId} (Environment: {env})")
+        # Clear environment selection logging
+        env = request.environment
+        
+        if env:
+            logger.info(f"Environment explicitly provided in request: {env}")
+        else:
+            env = "production"  # Default fallback if not specified in request
+            logger.info(f"No environment specified in request, defaulting to: {env}")
+        
+        logger.info(f"Processing transcription request for memo ID: {request.memoId} using {env} environment")
         
         # Step 1: Retrieve memo information
         memo = await supabase_service.get_memo(request.memoId, env)
@@ -143,8 +151,16 @@ async def retry_transcription(request: TranscriptionRequest):
     Retry transcription for a memo that previously failed.
     """
     try:
-        env = request.environment or "production"
-        logger.info(f"Received retry request for memo ID: {request.memoId} (Environment: {env})")
+        # Clear environment selection logging
+        env = request.environment
+        
+        if env:
+            logger.info(f"Environment explicitly provided in retry request: {env}")
+        else:
+            env = "production"  # Default fallback if not specified in request
+            logger.info(f"No environment specified in retry request, defaulting to: {env}")
+        
+        logger.info(f"Processing retry request for memo ID: {request.memoId} using {env} environment")
         
         # Get memo information
         memo = await supabase_service.get_memo(request.memoId, env)
