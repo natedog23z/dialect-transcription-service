@@ -20,52 +20,52 @@ class SupabaseService:
         Args:
             url_prod: Production Supabase project URL
             key_prod: Production Supabase service key
-            branch_prod: Production Supabase branch name
+            branch_prod: Production Supabase branch name (not used in v1.0.4)
             url_staging: Staging Supabase project URL
             key_staging: Staging Supabase service key
-            branch_staging: Staging Supabase branch name
+            branch_staging: Staging Supabase branch name (not used in v1.0.4)
             url_local: Local Supabase project URL
             key_local: Local Supabase service key
-            branch_local: Local Supabase branch name
+            branch_local: Local Supabase branch name (not used in v1.0.4)
         """
         self.clients = {}
         self.branches = {}
         
         # Initialize production client if credentials are provided
         if url_prod and key_prod:
-            # Initialize without options first - we'll handle branch separately
+            # Initialize client
             self.clients['production'] = create_client(url_prod, key_prod)
             
-            # Store branch name if provided
+            # Store branch name for logging purposes only (not used in v1.0.4)
             if branch_prod:
                 self.branches['production'] = branch_prod
-                logger.info(f"Production Supabase client initialized with branch: {branch_prod}")
+                logger.info(f"Production Supabase client initialized (branch {branch_prod} noted but not used in this version)")
             else:
-                logger.info("Production Supabase client initialized with default branch")
+                logger.info("Production Supabase client initialized")
         
         # Initialize staging client if credentials are provided
         if url_staging and key_staging:
-            # Initialize without options first - we'll handle branch separately
+            # Initialize client
             self.clients['staging'] = create_client(url_staging, key_staging)
             
-            # Store branch name if provided
+            # Store branch name for logging purposes only (not used in v1.0.4)
             if branch_staging:
                 self.branches['staging'] = branch_staging
-                logger.info(f"Staging Supabase client initialized with branch: {branch_staging}")
+                logger.info(f"Staging Supabase client initialized (branch {branch_staging} noted but not used in this version)")
             else:
-                logger.info("Staging Supabase client initialized with default branch")
+                logger.info("Staging Supabase client initialized")
         
         # Initialize local client if credentials are provided
         if url_local and key_local:
-            # Initialize without options first - we'll handle branch separately
+            # Initialize client
             self.clients['local'] = create_client(url_local, key_local)
             
-            # Store branch name if provided
+            # Store branch name for logging purposes only (not used in v1.0.4)
             if branch_local:
                 self.branches['local'] = branch_local
-                logger.info(f"Local Supabase client initialized with branch: {branch_local}")
+                logger.info(f"Local Supabase client initialized (branch {branch_local} noted but not used in this version)")
             else:
-                logger.info("Local Supabase client initialized with default branch")
+                logger.info("Local Supabase client initialized")
             
         # Get system environment variable, but don't use it directly
         # This will only be used when no environment is specified in requests
@@ -86,9 +86,12 @@ class SupabaseService:
         logger.info(f"Supabase service initialized with environments: {', '.join(self.clients.keys())}")
         logger.info(f"Default environment (used when no environment is specified): {self.default_environment}")
         
-        # Log branch info
+        # Log branch info (for reference only, not used in v1.0.4)
         for env, branch in self.branches.items():
-            logger.info(f"Branch for {env} environment: {branch}")
+            logger.info(f"Branch for {env} environment: {branch} (noted but not used in this version)")
+            
+        # Log important note about branching
+        logger.warning("NOTE: Supabase client v1.0.4 does not support branching via schema method. Branch names are stored for reference only.")
     
     def get_client(self, environment: Optional[str] = None) -> Tuple[Client, Optional[str]]:
         """
@@ -119,37 +122,9 @@ class SupabaseService:
             raise ValueError(err_msg)
             
         branch = self.branches.get(env)
-        logger.debug(f"Using Supabase client for environment: {env}, branch: {branch if branch else 'default'}")
+        logger.debug(f"Using Supabase client for environment: {env}, branch: {branch if branch else 'default'} (branch not used in this version)")
         
         return self.clients[env], branch
-    
-    def _apply_branch_schema(self, query, branch: Optional[str], env_display: str):
-        """
-        Apply branch schema to a query if supported by the client.
-        
-        Args:
-            query: The Supabase query builder
-            branch: The branch name to apply
-            env_display: Environment name for logging
-            
-        Returns:
-            The query with schema applied if supported
-        """
-        if not branch:
-            return query
-            
-        try:
-            # Try to use schema method if available (newer Supabase client versions)
-            return query.schema(branch)
-        except AttributeError:
-            # If schema method is not available, log a warning and continue without it
-            logger.warning(f"Schema method not supported in this version of Supabase client. Continuing without branch specification for {env_display} environment.")
-            
-            # Alternative approach: For older Supabase client versions, we could use RPC calls
-            # to specify the schema, but this requires specific functions to be set up in Supabase
-            # Example: client.rpc('get_data_from_schema', {'schema_name': branch, 'table': 'memos'})
-            
-            return query
     
     async def get_memo(self, memo_id: str, environment: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -174,11 +149,8 @@ class SupabaseService:
             branch_display = f", branch: {branch}" if branch else ""
             logger.info(f"Retrieving memo {memo_id} from {env_display} environment{branch_display}")
             
-            # Use the branch schema if specified and supported
-            query = client.table("memos")
-            query = self._apply_branch_schema(query, branch, env_display)
-                
-            response = query.select("*").eq("id", memo_id).execute()
+            # In v1.0.4, we can't use schema method, so we just use the client directly
+            response = client.table("memos").select("*").eq("id", memo_id).execute()
             
             if not response.data or len(response.data) == 0:
                 raise Exception(f"Memo with ID {memo_id} not found")
@@ -217,11 +189,8 @@ class SupabaseService:
             if transcript is not None:
                 update_data["transcript"] = transcript
             
-            # Use the branch schema if specified and supported
-            query = client.table("memos")
-            query = self._apply_branch_schema(query, branch, env_display)
-                
-            query.update(update_data).eq("id", memo_id).execute()
+            # In v1.0.4, we can't use schema method, so we just use the client directly
+            client.table("memos").update(update_data).eq("id", memo_id).execute()
             
             logger.info(f"Successfully updated memo {memo_id} status to {status}")
         except Exception as e:
@@ -310,12 +279,8 @@ class SupabaseService:
             branch_display = f", branch: {branch}" if branch else ""
             logger.debug(f"Checking connection to {env_display} environment{branch_display}")
             
-            # Use the branch schema if specified and supported
-            query = client.table("memos")
-            query = self._apply_branch_schema(query, branch, env_display)
-                
-            # Simple query to check if we can connect
-            query.select("id").limit(1).execute()
+            # In v1.0.4, we can't use schema method, so we just use the client directly
+            client.table("memos").select("id").limit(1).execute()
             
             logger.info(f"Supabase connection check successful for {env_display} environment{branch_display}")
             return True
