@@ -121,16 +121,35 @@ class SupabaseService:
         branch = self.branches.get(env)
         logger.debug(f"Using Supabase client for environment: {env}, branch: {branch if branch else 'default'}")
         
-        # For database operations, you can use the client with the specified schema
-        # Example usage: 
-        # from supabase.client import ClientOptions
-        # client, branch = self.get_client('staging')
-        # if branch:
-        #     result = client.table('table_name').schema(branch).select('*').execute()
-        # else:
-        #     result = client.table('table_name').select('*').execute()
-        
         return self.clients[env], branch
+    
+    def _apply_branch_schema(self, query, branch: Optional[str], env_display: str):
+        """
+        Apply branch schema to a query if supported by the client.
+        
+        Args:
+            query: The Supabase query builder
+            branch: The branch name to apply
+            env_display: Environment name for logging
+            
+        Returns:
+            The query with schema applied if supported
+        """
+        if not branch:
+            return query
+            
+        try:
+            # Try to use schema method if available (newer Supabase client versions)
+            return query.schema(branch)
+        except AttributeError:
+            # If schema method is not available, log a warning and continue without it
+            logger.warning(f"Schema method not supported in this version of Supabase client. Continuing without branch specification for {env_display} environment.")
+            
+            # Alternative approach: For older Supabase client versions, we could use RPC calls
+            # to specify the schema, but this requires specific functions to be set up in Supabase
+            # Example: client.rpc('get_data_from_schema', {'schema_name': branch, 'table': 'memos'})
+            
+            return query
     
     async def get_memo(self, memo_id: str, environment: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -155,12 +174,9 @@ class SupabaseService:
             branch_display = f", branch: {branch}" if branch else ""
             logger.info(f"Retrieving memo {memo_id} from {env_display} environment{branch_display}")
             
-            # Use the branch schema if specified
+            # Use the branch schema if specified and supported
             query = client.table("memos")
-            
-            # Apply branch schema if available
-            if branch:
-                query = query.schema(branch)
+            query = self._apply_branch_schema(query, branch, env_display)
                 
             response = query.select("*").eq("id", memo_id).execute()
             
@@ -201,12 +217,9 @@ class SupabaseService:
             if transcript is not None:
                 update_data["transcript"] = transcript
             
-            # Use the branch schema if specified
+            # Use the branch schema if specified and supported
             query = client.table("memos")
-            
-            # Apply branch schema if available
-            if branch:
-                query = query.schema(branch)
+            query = self._apply_branch_schema(query, branch, env_display)
                 
             query.update(update_data).eq("id", memo_id).execute()
             
@@ -297,12 +310,9 @@ class SupabaseService:
             branch_display = f", branch: {branch}" if branch else ""
             logger.debug(f"Checking connection to {env_display} environment{branch_display}")
             
-            # Use the branch schema if specified
+            # Use the branch schema if specified and supported
             query = client.table("memos")
-            
-            # Apply branch schema if available
-            if branch:
-                query = query.schema(branch)
+            query = self._apply_branch_schema(query, branch, env_display)
                 
             # Simple query to check if we can connect
             query.select("id").limit(1).execute()
