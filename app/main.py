@@ -39,17 +39,20 @@ logger.add(
 # Request and response models
 class TranscriptionRequest(BaseModel):
     memoId: str
+    recordType: str = "memos"  # Default to 'memos' for backward compatibility
 
 class TranscriptionResponse(BaseModel):
     success: bool
     memoId: str
     transcript: str = None
+    recordType: str = "memos"
 
 class ErrorResponse(BaseModel):
     success: bool
     memoId: str
     error: str
     message: str
+    recordType: str = "memos"
 
 @app.get("/")
 async def root():
@@ -69,20 +72,21 @@ async def transcribe_audio(request: TranscriptionRequest):
     5. Update memo with transcription and status 'completed'
     """
     try:
-        logger.info(f"Received transcription request for memo ID: {request.memoId}")
+        logger.info(f"Received transcription request for {request.recordType} ID: {request.memoId}")
         
         # Step 1: Retrieve memo information
-        memo = await supabase_service.get_memo(request.memoId)
-        logger.info(f"Retrieved memo: {memo['id']}, status: {memo['status']}")
+        memo = await supabase_service.get_memo(request.memoId, request.recordType)
+        logger.info(f"Retrieved {request.recordType} record: {memo['id' if request.recordType == 'memos' else 'reply_id']}, status: {memo['status']}")
         
         # Step 2: Update memo status to 'transcribing'
-        await supabase_service.update_memo_status(request.memoId, "transcribing")
+        await supabase_service.update_memo_status(request.memoId, "transcribing", record_type=request.recordType)
         
         try:
             # Step 3: Download audio file
             audio_file_path = await supabase_service.download_audio(
                 memo['audio_url'], 
-                settings.TEMP_DIR
+                settings.TEMP_DIR,
+                record_type=request.recordType
             )
             
             # Step 4: Transcribe audio
@@ -92,32 +96,35 @@ async def transcribe_audio(request: TranscriptionRequest):
             await supabase_service.update_memo_status(
                 request.memoId, 
                 "completed",
-                transcript
+                transcript,
+                record_type=request.recordType
             )
             
-            logger.info(f"Successfully transcribed memo {request.memoId}")
+            logger.info(f"Successfully transcribed {request.recordType} {request.memoId}")
             
             return {
                 "success": True,
                 "memoId": request.memoId,
-                "transcript": transcript
+                "transcript": transcript,
+                "recordType": request.recordType
             }
             
         except Exception as e:
             # If there's an error during processing, update the memo status
             error_type = type(e).__name__
-            await supabase_service.update_memo_status(request.memoId, "error")
+            await supabase_service.update_memo_status(request.memoId, "error", record_type=request.recordType)
             raise Exception(f"{error_type}: {str(e)}")
             
     except Exception as e:
-        logger.error(f"Error transcribing memo {request.memoId}: {str(e)}")
+        logger.error(f"Error transcribing {request.recordType} {request.memoId}: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail={
                 "success": False,
                 "memoId": request.memoId,
                 "error": "processing_error",
-                "message": str(e)
+                "message": str(e),
+                "recordType": request.recordType
             }
         )
 
@@ -127,21 +134,22 @@ async def retry_transcription(request: TranscriptionRequest):
     Retry transcription for a memo that previously failed.
     """
     try:
-        logger.info(f"Received retry request for memo ID: {request.memoId}")
+        logger.info(f"Received retry request for {request.recordType} ID: {request.memoId}")
         
         # Get memo information
-        memo = await supabase_service.get_memo(request.memoId)
+        memo = await supabase_service.get_memo(request.memoId, request.recordType)
         
         # Verify memo is in error state
         if memo['status'] != "error":
-            logger.warning(f"Cannot retry memo {request.memoId} with status {memo['status']}")
+            logger.warning(f"Cannot retry {request.recordType} {request.memoId} with status {memo['status']}")
             raise HTTPException(
                 status_code=400,
                 detail={
                     "success": False,
                     "memoId": request.memoId,
                     "error": "invalid_retry",
-                    "message": f"Cannot retry a memo with status '{memo['status']}'. Only memos with 'error' status can be retried."
+                    "message": f"Cannot retry a {request.recordType.rstrip('s')} with status '{memo['status']}'. Only records with 'error' status can be retried.",
+                    "recordType": request.recordType
                 }
             )
         
@@ -152,14 +160,15 @@ async def retry_transcription(request: TranscriptionRequest):
         # Re-raise HTTP exceptions as-is
         raise
     except Exception as e:
-        logger.error(f"Error retrying transcription for memo {request.memoId}: {str(e)}")
+        logger.error(f"Error retrying transcription for {request.recordType} {request.memoId}: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail={
                 "success": False,
                 "memoId": request.memoId,
                 "error": "retry_error",
-                "message": str(e)
+                "message": str(e),
+                "recordType": request.recordType
             }
         )
 

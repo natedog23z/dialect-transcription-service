@@ -22,12 +22,13 @@ class SupabaseService:
         self.storage_bucket = "audio_memos"
         logger.info("Supabase service initialized")
     
-    async def get_memo(self, memo_id: str) -> Dict[str, Any]:
+    async def get_memo(self, memo_id: str, record_type: str = "memos") -> Dict[str, Any]:
         """
         Retrieve a memo record from the database.
         
         Args:
             memo_id: UUID of the memo to retrieve
+            record_type: Type of record ('memos' or 'memo_replies')
             
         Returns:
             Dict containing the memo data
@@ -36,17 +37,26 @@ class SupabaseService:
             Exception: If memo not found or other database error
         """
         try:
-            response = self.client.table("memos").select("*").eq("id", memo_id).execute()
+            logger.info(f"Getting {record_type} record with ID {memo_id}")
             
+            if record_type == "memos":
+                response = self.client.table("memos").select("*").eq("id", memo_id).execute()
+                id_field = "id"
+            elif record_type == "memo_replies":
+                response = self.client.table("memo_replies").select("*").eq("reply_id", memo_id).execute()
+                id_field = "reply_id"
+            else:
+                raise ValueError(f"Invalid record type: {record_type}")
+                
             if not response.data or len(response.data) == 0:
-                raise Exception(f"Memo with ID {memo_id} not found")
+                raise Exception(f"{record_type.rstrip('s')} with {id_field} {memo_id} not found")
                 
             return response.data[0]
         except Exception as e:
-            logger.error(f"Error retrieving memo {memo_id}: {str(e)}")
+            logger.error(f"Error retrieving {record_type} {memo_id}: {str(e)}")
             raise
     
-    async def update_memo_status(self, memo_id: str, status: str, transcript: Optional[str] = None) -> None:
+    async def update_memo_status(self, memo_id: str, status: str, transcript: Optional[str] = None, record_type: str = "memos") -> None:
         """
         Update the status of a memo and optionally its transcript.
         
@@ -54,6 +64,7 @@ class SupabaseService:
             memo_id: UUID of the memo to update
             status: New status ('transcribing', 'completed', 'error')
             transcript: Optional transcript text
+            record_type: Type of record ('memos' or 'memo_replies')
             
         Raises:
             Exception: If update fails
@@ -63,21 +74,29 @@ class SupabaseService:
             
             if transcript is not None:
                 update_data["transcript"] = transcript
-                
-            self.client.table("memos").update(update_data).eq("id", memo_id).execute()
             
-            logger.info(f"Updated memo {memo_id} status to {status}")
+            if record_type == "memos":
+                self.client.table("memos").update(update_data).eq("id", memo_id).execute()
+                id_field = "id"
+            elif record_type == "memo_replies":
+                self.client.table("memo_replies").update(update_data).eq("reply_id", memo_id).execute()
+                id_field = "reply_id"
+            else:
+                raise ValueError(f"Invalid record type: {record_type}")
+            
+            logger.info(f"Updated {record_type.rstrip('s')} {memo_id} status to {status}")
         except Exception as e:
-            logger.error(f"Error updating memo {memo_id}: {str(e)}")
+            logger.error(f"Error updating {record_type.rstrip('s')} {memo_id}: {str(e)}")
             raise
     
-    async def download_audio(self, audio_url: str, temp_dir: str) -> str:
+    async def download_audio(self, audio_url: str, temp_dir: str, record_type: str = "memos") -> str:
         """
         Download an audio file from Supabase Storage.
         
         Args:
             audio_url: URL of the audio file in storage
             temp_dir: Directory to save the downloaded file
+            record_type: Type of record ('memos' or 'memo_replies')
             
         Returns:
             Path to the downloaded file
@@ -88,7 +107,10 @@ class SupabaseService:
         try:
             # Handle both formats:
             # 1. Full path including bucket name: "audio_memos/filename.m4a"
-            # 2. Just the filename: "filename.m4a"
+            # 2. Just the filename: "filename.m4a" 
+            # 3. Thread reply path: "thread-replies/[room_id]/[timestamp].m4a"
+            
+            logger.info(f"Downloading audio from {audio_url} (record type: {record_type})")
             
             if f"{self.storage_bucket}/" in audio_url:
                 # Extract the path from the URL that contains the bucket name
@@ -129,8 +151,9 @@ class SupabaseService:
             True if connection is successful, False otherwise
         """
         try:
-            # Simple query to check if we can connect
+            # Check connectivity by querying both tables
             self.client.table("memos").select("id").limit(1).execute()
+            self.client.table("memo_replies").select("reply_id").limit(1).execute()
             return True
         except Exception as e:
             logger.error(f"Supabase connection check failed: {str(e)}")
